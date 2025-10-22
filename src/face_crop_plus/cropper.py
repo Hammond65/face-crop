@@ -907,3 +907,47 @@ class Cropper():
             
             # Process
             list(imap)
+            
+    def process_single(self, file_name):
+        if isinstance(file_name, str):
+            image = cv2.cvtColor(cv2.imread(file_name), cv2.COLOR_BGR2RGB)
+        else:
+            image = file_name.copy()
+        #print(self.det_model)
+        if self.det_model is not None:
+             # Create a batch of images (with faces) and their paddings
+            images, _, paddings = as_batch([image], self.resize_size)
+            images, paddings = as_tensor(images, self.device), paddings
+
+            # If landmarks were not given, predict, undo padding
+            landmarks, indices = self.det_model.predict(images)
+            landmarks -= paddings[indices][:, None, [2, 0]]
+
+        if landmarks is not None and len(landmarks) == 0:
+            # Nothing to save
+            print("error")
+            return
+            
+        if landmarks is not None and landmarks.shape[1] != self.num_std_landmarks:
+            # Compute the mean landmark coordinates from retrieved slices
+            slices = get_ldm_slices(self.num_std_landmarks, landmarks.shape[1])            
+            landmarks = np.stack([landmarks[:, s].mean(1) for s in slices], 1)
+
+        if self.enh_model is not None:
+            # Enhance some images
+            images = as_tensor(images, self.device)
+            images = self.enh_model.predict(images, landmarks, indices)
+
+        # Convert to numpy images, initialize groups
+        images, groups = as_numpy(images), (None, None)
+
+        if landmarks is not None:    
+            # Generate source, target landmarks, estimate & apply transform
+            images = self.crop_align(images, paddings, indices, landmarks)
+
+        if self.par_model is not None:
+            # Predict attribute and mask groups if face parsing desired
+            groups = self.par_model.predict(as_tensor(images, self.device))
+
+        # Pick file names for each face, save faces (by groups if exist)
+        return images[0]
